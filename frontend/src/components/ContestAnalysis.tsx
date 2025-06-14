@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useContest } from "@/context/ContestContext";
+import { useContest } from "../context/ContestContext";
 import { Calendar } from "lucide-react";
 import ContestSelector from "./ContestSelector";
 import Podium from "./Podium";

@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -11,6 +11,7 @@ from langchain.schema import BaseOutputParser
 from langgraph.graph import Graph, StateGraph, END
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict, Annotated
+import gradio as gr
 
 # State definition for LangGraph
 class NL2SQLState(TypedDict):
@@ -273,91 +274,278 @@ class NL2SQLConverter:
             "error": result.get("error")
         }
 
-# Example usage and testing
-def main():
- 
-    db_config = {
-    'host': 'ep-falling-sky-a8r9jwvy-pooler.eastus2.azure.neon.tech',
-    'database': 'neondb',
-    'user': 'neondb_owner',
-    'password': 'npg_5LS7pKYICxmZ',
-    'port': 5432,
-    'sslmode': 'require'
-    }
+# Global converter instance
+converter = None
 
-    # Initialize the converter
-    converter = NL2SQLConverter(db_config, model_name="llama3.2:latest")
-    # Example questions to test
-    test_questions = [
+def initialize_converter():
+    """Initialize the NL2SQL converter with database configuration"""
+    global converter
+    
+    db_config = {
+        'host': 'ep-falling-sky-a8r9jwvy-pooler.eastus2.azure.neon.tech',
+        'database': 'neondb',
+        'user': 'neondb_owner',
+        'password': 'npg_5LS7pKYICxmZ',
+        'port': 5432,
+        'sslmode': 'require'
+    }
+    
+    try:
+        converter = NL2SQLConverter(db_config, model_name="llama3.2:latest")
+        return "✅ NL2SQL Converter initialized successfully!"
+    except Exception as e:
+        return f"❌ Failed to initialize converter: {str(e)}"
+
+def process_question(question: str) -> Tuple[str, str, str]:
+    """Process natural language question and return results"""
+    global converter
+    
+    if not converter:
+        return "❌ Please initialize the converter first", "", ""
+    
+    if not question.strip():
+        return "❌ Please enter a question", "", ""
+    
+    try:
+        result = converter.query(question)
+        
+        # Format SQL query for display
+        sql_display = f"```sql\n{result['sql_query']}\n```"
+        
+        # Format results as a table if possible
+        results_display = ""
+        if result['results']:
+            if len(result['results']) <= 10:  # Show limited results
+                try:
+                    df = pd.DataFrame(result['results'])
+                    results_display = df.to_string(index=False)
+                except:
+                    results_display = json.dumps(result['results'], indent=2, default=str)
+            else:
+                results_display = f"Query returned {len(result['results'])} rows (showing first 10):\n"
+                try:
+                    df = pd.DataFrame(result['results'][:10])
+                    results_display += df.to_string(index=False)
+                except:
+                    results_display += json.dumps(result['results'][:10], indent=2, default=str)
+        else:
+            results_display = "No results found"
+        
+        return result['answer'], sql_display, results_display
+        
+    except Exception as e:
+        return f"❌ Error processing question: {str(e)}", "", ""
+
+def get_example_questions():
+    """Return example questions for testing"""
+    return [
         "Show me all students from CSE department",
         "What is the average LeetCode rating of all students?",
         "Who has the highest Codeforces rating?",
         "List students who participated in contests on LEETCODE platform",
         "How many students are there in each department?",
         "Show me students with LeetCode rating above 1500",
-        "What are the recent contests in the last 30 days?",
-        "Find students who have solved more than 100 LeetCode problems"
+        "Find students who have solved more than 100 LeetCode problems",
+        "What are the top 5 students by Codeforces rating?"
     ]
+
+# Create Gradio interface
+def create_gradio_app():
+    """Create and configure the Gradio interface"""
     
-    print("🚀 Natural Language to SQL Converter Ready!")
-    print("=" * 50)
+    with gr.Blocks(
+        title="Natural Language to SQL Query System",
+        theme=gr.themes.Soft(),
+        css="""
+        .main-header {
+            text-align: center;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+        }
+        .example-box {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        """
+    ) as app:
+        
+        # Header
+        gr.HTML("""
+            <div class="main-header">
+                <h1>🤖 Natural Language to SQL Query System</h1>
+                <p>Ask questions about student records in plain English!</p>
+            </div>
+        """)
+        
+        # Initialization section
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("## 🚀 System Initialization")
+                init_btn = gr.Button("Initialize NL2SQL Converter", variant="primary", size="lg")
+                init_status = gr.Textbox(
+                    label="Initialization Status",
+                    interactive=False,
+                    show_label=True
+                )
+        
+        # Main query interface
+        gr.Markdown("## 💬 Ask Your Question")
+        
+        with gr.Row():
+            with gr.Column(scale=2):
+                question_input = gr.Textbox(
+                    label="Enter your question in plain English",
+                    placeholder="e.g., What is the average LeetCode rating?",
+                    lines=2
+                )
+                
+                with gr.Row():
+                    submit_btn = gr.Button("🔍 Submit Question", variant="primary")
+                    clear_btn = gr.Button("🗑️ Clear", variant="secondary")
+            
+            with gr.Column(scale=1):
+                gr.Markdown("### 📝 Example Questions")
+                example_questions = get_example_questions()
+                for i, example in enumerate(example_questions[:4]):  # Show first 4 examples
+                    gr.Button(
+                        example,
+                        variant="outline",
+                        size="sm"
+                    ).click(
+                        lambda x=example: x,
+                        outputs=question_input
+                    )
+        
+        # Results section
+        gr.Markdown("## 📊 Results")
+        
+        with gr.Row():
+            with gr.Column():
+                answer_output = gr.Textbox(
+                    label="🤖 Natural Language Answer",
+                    lines=5,
+                    interactive=False
+                )
+            
+        with gr.Row():
+            with gr.Column():
+                sql_output = gr.Code(
+                    label="🔧 Generated SQL Query",
+                    language="sql",
+                    interactive=False
+                )
+            
+            with gr.Column():
+                results_output = gr.Code(
+                    label="📋 Query Results",
+                    language="json",
+                    interactive=False
+                )
+        
+        # More examples section
+        with gr.Accordion("📚 More Example Questions", open=False):
+            gr.HTML("""
+                <div class="example-box">
+                    <h4>Try these example questions:</h4>
+                    <ul>
+                        <li>"Show me all students from CSE department"</li>
+                        <li>"What is the average LeetCode rating of all students?"</li>
+                        <li>"Who has the highest Codeforces rating?"</li>
+                        <li>"List students who participated in contests on LEETCODE platform"</li>
+                        <li>"How many students are there in each department?"</li>
+                        <li>"Show me students with LeetCode rating above 1500"</li>
+                        <li>"Find students who have solved more than 100 LeetCode problems"</li>
+                        <li>"What are the top 5 students by Codeforces rating?"</li>
+                    </ul>
+                </div>
+            """)
+        
+        # Database schema information
+        with gr.Accordion("🗂️ Database Schema Information", open=False):
+            gr.Code(
+                """
+                Table: StudentRecord
+                Columns:
+                - id: TEXT (Primary Key, UUID)
+                - studentid: TEXT (Student identifier)
+                - leetcodeid: TEXT (LeetCode username)
+                - codeforcesid: TEXT (Codeforces username)
+                - codechefid: TEXT (CodeChef username)
+                - leetcoderating: INTEGER (LeetCode rating)
+                - codeforcesrating: INTEGER (Codeforces rating)
+                - codechefrating: INTEGER (CodeChef rating)
+                - leetcodeproblemcount: INTEGER (Number of problems solved on LeetCode)
+                - department: TEXT (Academic department)
+                - batch: TEXT (Academic batch/year)
+                - platform: Platform ENUM ('LEETCODE', 'CODEFORCES', 'CODECHEF')
+                - contestname: TEXT (Contest name)
+                - contestrank: INTEGER (Rank in contest)
+                - contestdate: TIMESTAMP WITH TIME ZONE (Contest date)
+                - createdat: TIMESTAMP WITH TIME ZONE (Record creation time)
+                - updatedat: TIMESTAMP WITH TIME ZONE (Record update time)
+                """,
+                language="sql"
+            )
+        
+        # Event handlers
+        init_btn.click(
+            fn=initialize_converter,
+            outputs=[init_status]
+        )
+        
+        submit_btn.click(
+            fn=process_question,
+            inputs=[question_input],
+            outputs=[answer_output, sql_output, results_output]
+        )
+        
+        clear_btn.click(
+            lambda: ("", "", "", ""),
+            outputs=[question_input, answer_output, sql_output, results_output]
+        )
+        
+        # Enter key support
+        question_input.submit(
+            fn=process_question,
+            inputs=[question_input],
+            outputs=[answer_output, sql_output, results_output]
+        )
     
-    # Interactive mode
-    while True:
-        print("\nOptions:")
-        print("1. Ask a custom question")
-        print("2. Test with example questions")
-        print("3. Exit")
-        
-        choice = input("\nEnter your choice (1-3): ").strip()
-        
-        if choice == "1":
-            question = input("\nEnter your question: ").strip()
-            if question:
-                print("\n" + "="*50)
-                print(f"Processing: {question}")
-                print("="*50)
-                
-                result = converter.query(question)
-                
-                print(f"\n📝 Generated SQL Query:")
-                print(result["sql_query"])
-                
-                if result["error"]:
-                    print(f"\n❌ Error: {result['error']}")
-                else:
-                    print(f"\n📊 Query Results: {len(result['results'])} rows")
-                    if result["results"] and len(result["results"]) <= 5:
-                        for i, row in enumerate(result["results"], 1):
-                            print(f"Row {i}: {row}")
-                
-                print(f"\n🤖 Answer:")
-                print(result["answer"])
-        
-        elif choice == "2":
-            print("\nTesting example questions:")
-            for i, question in enumerate(test_questions, 1):
-                print(f"\n{i}. Testing: {question}")
-                result = converter.query(question)
-                print(f"   SQL: {result['sql_query'][:100]}...")
-                if result["error"]:
-                    print(f"   Error: {result['error']}")
-                else:
-                    print(f"   Results: {len(result['results'])} rows")
-        
-        elif choice == "3":
-            print("Goodbye! 👋")
-            break
-        
-        else:
-            print("Invalid choice. Please try again.")
+    return app
+
+# Main function to run the app
+def main():
+    """Main function to launch the Gradio app"""
+    print("🚀 Starting Natural Language to SQL Query System...")
+    print("📋 Make sure you have:")
+    print("   - Ollama installed and running")
+    print("   - llama3.2:latest model pulled")
+    print("   - Database accessible")
+    print("   - All required packages installed")
+    print()
+    
+    app = create_gradio_app()
+    
+    # Launch the app
+    app.launch(
+        server_name="127.0.0.1",  # Change to "0.0.0.0" to make it accessible externally
+        server_port=7860,
+        share=False,  # Set to True to create a public link
+        debug=True,
+        show_error=True
+    )
 
 if __name__ == "__main__":
-    # Install required packages first:
-    # pip install psycopg2-binary pandas langchain-community ollama langgraph
+    # Required packages:
+    # pip install gradio psycopg2-binary pandas langchain-community ollama langgraph
     
     # Make sure Ollama is installed and running:
     # curl -fsSL https://ollama.ai/install.sh | sh
-    # ollama pull llama3.1
+    # ollama pull llama3.2:latest
     
     main()

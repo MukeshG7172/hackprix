@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
-import { useContest } from "@/context/ContestContext";
+import { useContest } from "../context/ContestContext";
 
 // Months for display
 const months = [

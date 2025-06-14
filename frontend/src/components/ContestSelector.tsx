@@ -219,7 +219,7 @@ export default function ContestSelector({ date }: { date: string }) {
             </div>
 
             {/* Platform Selection Pills */}
-            <div className="flex flex-wrap gap-2 mb-6">
+            <div className="flex flex-wrap gap-2 mb-3">
               {platforms.map((platform) => (
                 <Button
                   key={platform}
@@ -343,7 +343,7 @@ export default function ContestSelector({ date }: { date: string }) {
               {/* Contest Cards */}
               <div
                 ref={carouselRef}
-                className="flex justify-center gap-6 overflow-hidden p-2 relative w-full"
+                className="flex justify-center gap-6 overflow-hidden relative w-full"
               >
                 <AnimatePresence mode="wait">
                   <motion.div

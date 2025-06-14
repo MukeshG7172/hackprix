@@ -1,9 +1,11 @@
 "use client";
 
+import React from "react";
 import { useContest } from "@/context/ContestContext";
 import { useState, useEffect } from "react";
 import ContestSelector from "@/components/ContestSelector";
 import Pagination from "@/components/Pagination";
+import TotalCountChart from "@/components/TotalCountChart";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,11 +14,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 // import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { platform } from "os";
 
 type FilterType = "dept" | "section" | "noOfQuestions" | "batch" | "status" | "rank";
 
 export default function Leaderboard() {
   const { selectedContest, isLoading } = useContest();
+  console.log(selectedContest?.allParticipants[0].leetcode_id);
   const [filteredParticipants, setFilteredParticipants] = useState([]);
   const [filters, setFilters] = useState({
     dept: "all",
@@ -38,7 +42,8 @@ export default function Leaderboard() {
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage] = useState(25);
-
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+  
   useEffect(() => {
     setCurrentPage(1);
   }, [filters, selectedContest]);
@@ -199,6 +204,10 @@ export default function Leaderboard() {
   const uniqueSections = getUniqueValues("section");
   const uniqueNoOfQuestions = getUniqueValues("no_of_questions");
   const uniqueBatches = getUniqueValues("year");
+
+  const toggleExpandRow = (index: number) => {
+    setExpandedRow(expandedRow === index ? null : index);
+  };
 
   return (
     <div className="container mx-auto px-4 py-6 mt-16">
@@ -510,31 +519,47 @@ export default function Leaderboard() {
                       </TableHead>
                     </TableRow>
                   </TableHeader>
-                  <TableBody>
-                    {paginatedParticipants.map((participant, index) => (
-                      <TableRow key={index}>
-                        <TableCell className="text-center">{(currentPage - 1) * rowsPerPage + index + 1}</TableCell>
-                        <TableCell>
-                          <Badge
-                            className={`${getRankBadgeColor(index, participant.rank)}`}
-                          >
-                            {participant.rank === -1 ? "NA" : `#${participant.rank}`}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-medium">{participant.name}</TableCell>
-                        <TableCell className="text-center">{participant.dept}</TableCell>
-                        <TableCell className="text-center">{participant.section}</TableCell>
-                        <TableCell className="text-center">{participant.no_of_questions}</TableCell>
-                        <TableCell className="text-center">{participant.year}</TableCell>
-                        {selectedContest.type === "Leetcode" && (
-                          <TableCell className="text-center">{calculateLeetcodeDuration(participant.finish_time)}</TableCell>
-                        )}
-                        <TableCell className={`text-center ${participant.rank === -1 ? "text-red-600" : "text-green-600"}`}>
-                          {getStatus(participant.rank)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
+                    <TableBody>
+                      {paginatedParticipants.map((participant, index) => (
+                        <React.Fragment key={index}>
+                          <TableRow onClick={() => toggleExpandRow(index)}>
+                            <TableCell className="text-center">
+                              {(currentPage - 1) * rowsPerPage + index + 1}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={`${getRankBadgeColor(index, participant.rank)}`}>
+                                {participant.rank === -1 ? "NA" : `#${participant.rank}`}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-medium">{participant.name}</TableCell>
+                            <TableCell className="text-center">{participant.dept}</TableCell>
+                            <TableCell className="text-center">{participant.section}</TableCell>
+                            <TableCell className="text-center">{participant.no_of_questions}</TableCell>
+                            <TableCell className="text-center">{participant.year}</TableCell>
+                            {selectedContest.type === "Leetcode" && (
+                              <TableCell className="text-center">
+                                {calculateLeetcodeDuration(participant.finish_time)}
+                              </TableCell>
+                            )}
+                            <TableCell
+                              className={`text-center ${participant.rank === -1 ? "text-red-600" : "text-green-600"}`}
+                            >
+                              {getStatus(participant.rank)}
+                            </TableCell>
+                          </TableRow>
+
+                          {expandedRow === index && selectedContest.type === "Leetcode" && (
+                            <TableRow>
+                              <TableCell colSpan={9} className="bg-gray-800 p-6 border-none">
+                                <div className="bg-gray-900 rounded-xl shadow-lg p-4">
+                                  <TotalCountChart username={participant.leetcode_id} />
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </TableBody>
                 </Table>
 
                 <Pagination

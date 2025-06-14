@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  directUrl    = env("DIRECT_URL")
+  relationMode = "prisma"
+}
+
+model Students {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  name                    String
+  leetcode_id             String                    @unique
+  codechef_id             String                    @unique
+  codeforces_id           String                    @unique
+  dept                    String
+  batch                   String
+  section                 String
+  leetcode_rating         BigInt                    @default(-1)
+  codechef_rating         BigInt                    @default(-1)
+  codeforces_rating       BigInt                    @default(-1)
+  college                 String                    @default("CIT")
+  reg_no                  String                    @unique @default("")
+  contest                 ContestParticipation[]
+  CodechefParticipation   CodechefParticipation[]
+  CodeforcesParticipation CodeforcesParticipation[]
+}
+
+model ContestParticipation {
+  id          String    @id @default(uuid())
+  studentId   String
+  contestId   String
+  contestName String
+  rank        Int       @default(0)
+  finishTime  String?
+  total_qns   Int?
+  questions   Json?
+  created_at  DateTime  @default(now())
+  Students    Students? @relation(fields: [studentId], references: [id])
+  Contest     Contest?  @relation(fields: [contestId], references: [id])
+
+  @@unique([studentId, contestId])
+  @@index([contestId])
+  @@index([studentId])
+}
+
+model CodechefParticipation {
+  id          String    @id @default(uuid())
+  studentId   String
+  contestId   String
+  contestName String
+  rank        Int       @default(0)
+  total_qns   Int?
+  questions   Json?
+  created_at  DateTime  @default(now())
+  Students    Students? @relation(fields: [studentId], references: [id])
+  Contest     Contest?  @relation(fields: [contestId], references: [id])
+
+  @@unique([studentId, contestId])
+  @@index([contestId])
+  @@index([studentId])
+}
+
+model CodeforcesParticipation {
+  id          String    @id @default(uuid())
+  studentId   String
+  contestId   String
+  contestName String
+  rank        Int       @default(0)
+  finishTime  String?
+  total_qns   Int?
+  questions   Json?
+  created_at  DateTime  @default(now())
+  Students    Students? @relation(fields: [studentId], references: [id])
+  Contest     Contest?  @relation(fields: [contestId], references: [id])
+
+  @@unique([studentId, contestId])
+  @@index([contestId])
+  @@index([studentId])
+}
+
+model Contest {
+  id                      String                    @id @default(uuid())
+  name                    String                    @unique
+  date                    DateTime
+  type                    ContestType
+  participants            ContestParticipation[]
+  CodechefParticipation   CodechefParticipation[]
+  CodeforcesParticipation CodeforcesParticipation[]
+}
+
+enum ContestType {
+  Codeforces
+  Codechef
+  Leetcode
+}

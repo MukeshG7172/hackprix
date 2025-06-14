@@ -5,8 +5,8 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import pandas as pd
-from langchain_community.llms import Ollama
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_groq import ChatGroq
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -17,6 +17,10 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict, Annotated
 import chromadb
 from chromadb.config import Settings
+from langchain_huggingface import HuggingFaceEmbeddings
+
+# Set environment variable for Groq API
+os.environ["GROQ_API_KEY"] = "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"  # Replace with your actual API key
 
 # State definition for LangGraph with RAG
 class NL2SQLRAGState(TypedDict):
@@ -69,10 +73,10 @@ class SQLQueryParser(BaseOutputParser):
 class RAGManager:
     """Manages RAG functionality with ChromaDB"""
     
-    def __init__(self, embedding_model: str = "nomic-embed-text:latest"):
+    def __init__(self, embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
         """Initialize RAG manager with ChromaDB"""
         self.embedding_model = embedding_model
-        self.embeddings = OllamaEmbeddings(model=embedding_model)
+        self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
         
         # Initialize ChromaDB client
         self.chroma_client = chromadb.PersistentClient(
@@ -250,18 +254,18 @@ class RAGManager:
             return [], ""
 
 class NL2SQLRAGConverter:
-    """Enhanced NL2SQL converter with RAG capabilities"""
+    """Enhanced NL2SQL converter with RAG capabilities using Groq"""
     
-    def __init__(self, db_config: Dict[str, str], model_name: str = "llama3.2:latest"):
+    def __init__(self, db_config: Dict[str, str], model_name: str = "llama-3.1-70b-versatile"):
         """
         Initialize the NL2SQL converter with RAG
         
         Args:
             db_config: Database connection configuration
-            model_name: Ollama model name
+            model_name: Groq model name
         """
         self.db_config = db_config
-        self.llm = Ollama(model=model_name, temperature=0)
+        self.llm = ChatGroq(model=model_name, temperature=0)
         self.sql_parser = SQLQueryParser()
         
         # Initialize RAG manager
@@ -381,7 +385,7 @@ class NL2SQLRAGConverter:
             )
             
             response = self.llm.invoke(formatted_prompt)
-            sql_query = self.sql_parser.parse(response)
+            sql_query = self.sql_parser.parse(response.content)
             
             return {**state, "sql_query": sql_query}
             
@@ -492,7 +496,7 @@ class NL2SQLRAGConverter:
             )
             
             response = self.llm.invoke(formatted_prompt)
-            final_answer = response.strip()
+            final_answer = response.content.strip()
             
             return {**state, "final_answer": final_answer}
             

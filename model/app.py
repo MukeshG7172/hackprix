@@ -1,9 +1,278 @@
 import os
 import json
 from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import pandas as pd
+from langchain_community.llms import Ollama
+from langchain.prompts import PromptTemplate
+from langchain.schema import BaseOutputParser
+from langgraph.graph import Graph, StateGraph, END
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict, Annotated
 import gradio as gr
-from nl2sql_rag import NL2SQLRAGConverter
+
+# State definition for LangGraph
+class NL2SQLState(TypedDict):
+    question: str
+    sql_query: str
+    query_result: List[Dict[str, Any]]
+    final_answer: str
+    error: Optional[str]
+
+class SQLQueryParser(BaseOutputParser):
+    """Custom parser to extract SQL query from LLM response"""
+    
+    def parse(self, text: str) -> str:
+        # Extract SQL query from the response
+        text = text.strip()
+        
+        # Look for SQL query between backticks or SQL keywords
+        if "```sql" in text.lower():
+            start = text.lower().find("```sql") + 6
+            end = text.find("```", start)
+            if end != -1:
+                return text[start:end].strip()
+        elif "```" in text:
+            start = text.find("```") + 3
+            end = text.find("```", start)
+            if end != -1:
+                return text[start:end].strip()
+        
+        # Look for SELECT, INSERT, UPDATE, DELETE statements
+        sql_keywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE']
+        for keyword in sql_keywords:
+            if keyword in text.upper():
+                # Find the SQL statement
+                lines = text.split('\n')
+                sql_lines = []
+                capturing = False
+                for line in lines:
+                    if any(kw in line.upper() for kw in sql_keywords):
+                        capturing = True
+                    if capturing:
+                        sql_lines.append(line)
+                        if line.strip().endswith(';'):
+                            break
+                return '\n'.join(sql_lines).strip()
+        
+        return text.strip()
+
+class NL2SQLConverter:
+    def __init__(self, db_config: Dict[str, str], model_name: str = "llama3.2:latest"):
+        """
+        Initialize the NL2SQL converter
+        
+        Args:
+            db_config: Database connection configuration
+            model_name: Ollama model name (free models: llama3.2:latest, codellama, etc.)
+        """
+        self.db_config = db_config
+        self.llm = Ollama(model=model_name, temperature=0)
+        self.sql_parser = SQLQueryParser()
+        
+        # Database schema information
+        self.schema_info = """
+        Database Schema for StudentRecord table:
+        
+        Table: StudentRecord
+        Columns:
+        - id: TEXT (Primary Key, UUID)
+        - studentid: TEXT (Student identifier)
+        - leetcodeid: TEXT (LeetCode username)
+        - codeforcesid: TEXT (Codeforces username)
+        - codechefid: TEXT (CodeChef username)
+        - leetcoderating: INTEGER (LeetCode rating)
+        - codeforcesrating: INTEGER (Codeforces rating)
+        - codechefrating: INTEGER (CodeChef rating)
+        - leetcodeproblemcount: INTEGER (Number of problems solved on LeetCode)
+        - department: TEXT (Academic department)
+        - batch: TEXT (Academic batch/year)
+        - platform: Platform ENUM ('LEETCODE', 'CODEFORCES', 'CODECHEF')
+        - contestname: TEXT (Contest name)
+        - contestrank: INTEGER (Rank in contest)
+        - contestdate: TIMESTAMP WITH TIME ZONE (Contest date)
+        - createdat: TIMESTAMP WITH TIME ZONE (Record creation time)
+        - updatedat: TIMESTAMP WITH TIME ZONE (Record update time)
+        """
+        
+        self.graph = self.create_graph()
+    
+    def create_graph(self) -> StateGraph:
+        """Create the LangGraph workflow"""
+        workflow = StateGraph(NL2SQLState)
+        
+        # Add nodes
+        workflow.add_node("generate_sql", self.generate_sql_query)
+        workflow.add_node("execute_query", self.execute_sql_query)
+        workflow.add_node("generate_answer", self.generate_natural_answer)
+        workflow.add_node("handle_error", self.handle_error)
+        
+        # Define the workflow
+        workflow.set_entry_point("generate_sql")
+        workflow.add_edge("generate_sql", "execute_query")
+        workflow.add_conditional_edges(
+            "execute_query",
+            self.should_handle_error,
+            {
+                "error": "handle_error",
+                "success": "generate_answer"
+            }
+        )
+        workflow.add_edge("generate_answer", END)
+        workflow.add_edge("handle_error", END)
+        
+        return workflow.compile()
+    
+    def generate_sql_query(self, state: NL2SQLState) -> NL2SQLState:
+        """Generate SQL query from natural language question"""
+        prompt = PromptTemplate(
+            template="""
+            You are a SQL expert. Convert the following natural language question into a SQL query.
+            
+            {schema_info}
+            
+            Question: {question}
+            
+            Important guidelines:
+            1. Use double quotes for table and column names (e.g., "StudentRecord", "studentId")
+            2. For Platform enum, use values: 'LEETCODE', 'CODEFORCES', 'CODECHEF'
+            3. Write efficient queries with proper WHERE clauses when needed
+            4. Use appropriate aggregation functions (COUNT, AVG, MAX, MIN, SUM) when needed
+            5. For date comparisons, use proper TIMESTAMP formatting
+            6. Return only the SQL query, no explanations
+            
+            SQL Query:
+            """,
+            input_variables=["schema_info", "question"]
+        )
+        
+        try:
+            formatted_prompt = prompt.format(
+                schema_info=self.schema_info,
+                question=state["question"]
+            )
+            
+            response = self.llm.invoke(formatted_prompt)
+            sql_query = self.sql_parser.parse(response)
+            
+            return {**state, "sql_query": sql_query}
+        except Exception as e:
+            return {**state, "error": f"Failed to generate SQL query: {str(e)}"}
+    
+    def execute_sql_query(self, state: NL2SQLState) -> NL2SQLState:
+        """Execute the generated SQL query"""
+        try:
+            # Connect to database
+            conn = psycopg2.connect(**self.db_config)
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Execute query
+            cursor.execute(state["sql_query"])
+            
+            # Fetch results
+            if state["sql_query"].strip().upper().startswith("SELECT"):
+                results = cursor.fetchall()
+                # Convert to list of dictionaries
+                query_result = [dict(row) for row in results]
+            else:
+                # For INSERT, UPDATE, DELETE operations
+                conn.commit()
+                query_result = [{"affected_rows": cursor.rowcount}]
+            
+            cursor.close()
+            conn.close()
+            
+            return {**state, "query_result": query_result}
+            
+        except Exception as e:
+            return {**state, "error": f"SQL execution error: {str(e)}"}
+    
+    def should_handle_error(self, state: NL2SQLState) -> str:
+        """Decide whether to handle error or proceed"""
+        return "error" if state.get("error") else "success"
+    
+    def handle_error(self, state: NL2SQLState) -> NL2SQLState:
+        """Handle errors and provide user-friendly messages"""
+        error_msg = state.get("error", "Unknown error occurred")
+        
+        final_answer = f"""
+        I encountered an error while processing your question: {error_msg}
+        
+        Please try rephrasing your question or check if:
+        1. The question refers to valid table columns
+        2. The question is clear and specific
+        3. Any date formats are reasonable
+        
+        Example questions you can ask:
+        - "Show me all students from CSE department"
+        - "What is the average LeetCode rating?"
+        - "Who has the highest Codeforces rating?"
+        - "List students who participated in contests on LEETCODE platform"
+        """
+        
+        return {**state, "final_answer": final_answer}
+    
+    def generate_natural_answer(self, state: NL2SQLState) -> NL2SQLState:
+        """Generate natural language answer from query results"""
+        prompt = PromptTemplate(
+            template="""
+            You are a helpful assistant that explains database query results in natural language.
+            
+            Original Question: {question}
+            SQL Query Used: {sql_query}
+            Query Results: {query_result}
+            
+            Please provide a clear, natural language answer to the original question based on the query results.
+            
+            Guidelines:
+            1. Be concise and direct
+            2. Include relevant numbers and statistics
+            3. If no results found, explain that clearly
+            4. Format the response in a user-friendly way
+            5. Don't mention technical database details unless relevant
+            
+            Answer:
+            """,
+            input_variables=["question", "sql_query", "query_result"]
+        )
+        
+        try:
+            formatted_prompt = prompt.format(
+                question=state["question"],
+                sql_query=state["sql_query"],
+                query_result=json.dumps(state["query_result"], indent=2, default=str)
+            )
+            
+            response = self.llm.invoke(formatted_prompt)
+            final_answer = response.strip()
+            
+            return {**state, "final_answer": final_answer}
+            
+        except Exception as e:
+            return {**state, "final_answer": f"Generated results but failed to create natural language response: {str(e)}"}
+    
+    def query(self, question: str) -> Dict[str, Any]:
+        """Main method to process natural language questions"""
+        initial_state = NL2SQLState(
+            question=question,
+            sql_query="",
+            query_result=[],
+            final_answer="",
+            error=None
+        )
+        
+        # Run the graph
+        result = self.graph.invoke(initial_state)
+        
+        return {
+            "question": result["question"],
+            "sql_query": result["sql_query"],
+            "results": result["query_result"],
+            "answer": result["final_answer"],
+            "error": result.get("error")
+        }
 
 # Global converter instance
 converter = None
@@ -22,27 +291,22 @@ def initialize_converter():
     }
     
     try:
-        print("🔄 Initializing NL2SQL converter with RAG...")
-        converter = NL2SQLRAGConverter(db_config, model_name="llama3.2:latest")
-        print("✅ NL2SQL Converter with RAG initialized successfully!")
-        return "✅ NL2SQL Converter with RAG initialized successfully!\n📚 Knowledge base loaded and ready."
+        converter = NL2SQLConverter(db_config, model_name="llama3.2:latest")
+        return "✅ NL2SQL Converter initialized successfully!"
     except Exception as e:
-        error_msg = f"❌ Failed to initialize converter: {str(e)}"
-        print(error_msg)
-        return error_msg
+        return f"❌ Failed to initialize converter: {str(e)}"
 
-def process_question(question: str) -> Tuple[str, str, str, str]:
-    """Process natural language question and return results with RAG context"""
+def process_question(question: str) -> Tuple[str, str, str]:
+    """Process natural language question and return results"""
     global converter
     
     if not converter:
-        return "❌ Please initialize the converter first", "", "", ""
+        return "❌ Please initialize the converter first", "", ""
     
     if not question.strip():
-        return "❌ Please enter a question", "", "", ""
+        return "❌ Please enter a question", "", ""
     
     try:
-        print(f"🔍 Processing question: {question}")
         result = converter.query(question)
         
         # Format SQL query for display
@@ -51,58 +315,26 @@ def process_question(question: str) -> Tuple[str, str, str, str]:
         # Format results as a table if possible
         results_display = ""
         if result['results']:
-            if len(result['results']) <= 20:  # Show limited results
+            if len(result['results']) <= 10:  # Show limited results
                 try:
                     df = pd.DataFrame(result['results'])
                     results_display = df.to_string(index=False)
                 except:
                     results_display = json.dumps(result['results'], indent=2, default=str)
             else:
-                results_display = f"Query returned {len(result['results'])} rows (showing first 20):\n"
+                results_display = f"Query returned {len(result['results'])} rows (showing first 10):\n"
                 try:
-                    df = pd.DataFrame(result['results'][:20])
+                    df = pd.DataFrame(result['results'][:10])
                     results_display += df.to_string(index=False)
                 except:
-                    results_display += json.dumps(result['results'][:20], indent=2, default=str)
+                    results_display += json.dumps(result['results'][:10], indent=2, default=str)
         else:
             results_display = "No results found"
         
-        # Format RAG context
-        rag_context_display = ""
-        if result.get('rag_context'):
-            rag_context_display = f"📚 **RAG Context Used:**\n\n{result['rag_context'][:1000]}..."
-        else:
-            rag_context_display = "No RAG context retrieved"
-        
-        return result['answer'], sql_display, results_display, rag_context_display
+        return result['answer'], sql_display, results_display
         
     except Exception as e:
-        error_msg = f"❌ Error processing question: {str(e)}"
-        print(error_msg)
-        return error_msg, "", "", ""
-
-def add_knowledge_to_rag(knowledge_content: str, knowledge_type: str = "custom") -> str:
-    """Add new knowledge to the RAG system"""
-    global converter
-    
-    if not converter:
-        return "❌ Please initialize the converter first"
-    
-    if not knowledge_content.strip():
-        return "❌ Please enter knowledge content"
-    
-    try:
-        metadata = {
-            "source": "user_added",
-            "type": knowledge_type,
-            "timestamp": pd.Timestamp.now().isoformat()
-        }
-        
-        result = converter.add_knowledge(knowledge_content, metadata)
-        return result
-        
-    except Exception as e:
-        return f"❌ Failed to add knowledge: {str(e)}"
+        return f"❌ Error processing question: {str(e)}", "", ""
 
 def get_example_questions():
     """Return example questions for testing"""
@@ -114,66 +346,15 @@ def get_example_questions():
         "How many students are there in each department?",
         "Show me students with LeetCode rating above 1500",
         "Find students who have solved more than 100 LeetCode problems",
-        "What are the top 5 students by Codeforces rating?",
-        "Compare average ratings across all platforms",
-        "Show me recent contest participants from the last month"
-    ]
-
-def get_sample_knowledge():
-    """Return sample knowledge that can be added to RAG"""
-    return [
-        """
-        Academic Department Information:
-        - CSE: Computer Science and Engineering
-        - ECE: Electronics and Communication Engineering
-        - ME: Mechanical Engineering
-        - EEE: Electrical and Electronics Engineering
-        
-        Common rating ranges:
-        - LeetCode: 1000-3000 (Expert level: 2100+)
-        - Codeforces: 800-3500 (Expert level: 1600+)
-        - CodeChef: 1000-3000 (Expert level: 2000+)
-        """,
-        
-        """
-        Contest Performance Analysis:
-        
-        To analyze contest performance:
-        1. Look at contest rank and participation
-        2. Consider the platform (different difficulty levels)
-        3. Check contest dates for recent activity
-        4. Compare performance across multiple contests
-        
-        Good performance indicators:
-        - Consistent participation across platforms
-        - Improving ratings over time
-        - High problem-solving count
-        - Low contest ranks (better performance)
-        """,
-        
-        """
-        Student Performance Metrics:
-        
-        Key performance indicators:
-        1. Rating consistency across platforms
-        2. Problem-solving volume (leetcodeproblemcount)
-        3. Contest participation frequency
-        4. Department-wise performance comparison
-        
-        Query patterns for analysis:
-        - Cross-platform rating correlation
-        - Department-wise average performance
-        - Active vs inactive student identification
-        - Performance trends over time
-        """
+        "What are the top 5 students by Codeforces rating?"
     ]
 
 # Create Gradio interface
 def create_gradio_app():
-    """Create and configure the Gradio interface with RAG features"""
+    """Create and configure the Gradio interface"""
     
     with gr.Blocks(
-        title="NL2SQL with RAG System",
+        title="Natural Language to SQL Query System",
         theme=gr.themes.Soft(),
         css="""
         .main-header {
@@ -190,21 +371,14 @@ def create_gradio_app():
             border-radius: 8px;
             border-left: 4px solid #667eea;
         }
-        .rag-section {
-            background-color: #f0f8ff;
-            padding: 1rem;
-            border-radius: 8px;
-            border-left: 4px solid #4169e1;
-        }
         """
     ) as app:
         
         # Header
         gr.HTML("""
             <div class="main-header">
-                <h1>🤖 Natural Language to SQL with RAG System</h1>
-                <p>Ask questions about student records in plain English with enhanced AI assistance!</p>
-                <p>✨ Now with Retrieval-Augmented Generation (RAG) for better query understanding</p>
+                <h1>🤖 Natural Language to SQL Query System</h1>
+                <p>Ask questions about student records in plain English!</p>
             </div>
         """)
         
@@ -212,12 +386,11 @@ def create_gradio_app():
         with gr.Row():
             with gr.Column():
                 gr.Markdown("## 🚀 System Initialization")
-                init_btn = gr.Button("Initialize NL2SQL + RAG System", variant="primary", size="lg")
+                init_btn = gr.Button("Initialize NL2SQL Converter", variant="primary", size="lg")
                 init_status = gr.Textbox(
                     label="Initialization Status",
                     interactive=False,
-                    show_label=True,
-                    lines=3
+                    show_label=True
                 )
         
         # Main query interface
@@ -227,7 +400,7 @@ def create_gradio_app():
             with gr.Column(scale=2):
                 question_input = gr.Textbox(
                     label="Enter your question in plain English",
-                    placeholder="e.g., What is the average LeetCode rating of CSE students?",
+                    placeholder="e.g., What is the average LeetCode rating?",
                     lines=2
                 )
                 
@@ -238,7 +411,7 @@ def create_gradio_app():
             with gr.Column(scale=1):
                 gr.Markdown("### 📝 Example Questions")
                 example_questions = get_example_questions()
-                for i, example in enumerate(example_questions[:5]):  # Show first 5 examples
+                for i, example in enumerate(example_questions[:4]):  # Show first 4 examples
                     gr.Button(
                         example,
                         variant="outline",
@@ -255,7 +428,7 @@ def create_gradio_app():
             with gr.Column():
                 answer_output = gr.Textbox(
                     label="🤖 Natural Language Answer",
-                    lines=6,
+                    lines=5,
                     interactive=False
                 )
             
@@ -274,59 +447,6 @@ def create_gradio_app():
                     interactive=False
                 )
         
-        # RAG Context Display
-        with gr.Row():
-            with gr.Column():
-                rag_context_output = gr.Markdown(
-                    label="📚 RAG Context Used",
-                    value="No context retrieved yet"
-                )
-        
-        # RAG Knowledge Management Section
-        gr.Markdown("## 🧠 RAG Knowledge Management")
-        
-        with gr.Accordion("📚 Add Knowledge to RAG System", open=False):
-            gr.HTML("""
-                <div class="rag-section">
-                    <h4>Enhance the AI's understanding by adding domain-specific knowledge:</h4>
-                    <p>You can add SQL examples, database documentation, or domain knowledge to improve query generation.</p>
-                </div>
-            """)
-            
-            with gr.Row():
-                with gr.Column(scale=2):
-                    knowledge_input = gr.Textbox(
-                        label="Knowledge Content",
-                        placeholder="Enter domain knowledge, SQL examples, or documentation...",
-                        lines=5
-                    )
-                    
-                    knowledge_type = gr.Dropdown(
-                        label="Knowledge Type",
-                        choices=["sql_examples", "database_docs", "domain_knowledge", "custom"],
-                        value="custom"
-                    )
-                    
-                    add_knowledge_btn = gr.Button("📚 Add Knowledge", variant="secondary")
-                    knowledge_status = gr.Textbox(
-                        label="Knowledge Addition Status",
-                        interactive=False,
-                        lines=2
-                    )
-                
-                with gr.Column(scale=1):
-                    gr.Markdown("### 📖 Sample Knowledge")
-                    sample_knowledge = get_sample_knowledge()
-                    for i, sample in enumerate(sample_knowledge):
-                        gr.Button(
-                            f"Sample {i+1}: {'Department Info' if i==0 else 'Contest Analysis' if i==1 else 'Performance Metrics'}",
-                            variant="outline",
-                            size="sm"
-                        ).click(
-                            lambda x=sample: x,
-                            outputs=knowledge_input
-                        )
-        
         # More examples section
         with gr.Accordion("📚 More Example Questions", open=False):
             gr.HTML("""
@@ -341,10 +461,6 @@ def create_gradio_app():
                         <li>"Show me students with LeetCode rating above 1500"</li>
                         <li>"Find students who have solved more than 100 LeetCode problems"</li>
                         <li>"What are the top 5 students by Codeforces rating?"</li>
-                        <li>"Compare average ratings across all platforms by department"</li>
-                        <li>"Show me recent contest participants from the last month"</li>
-                        <li>"Which students are active on multiple platforms?"</li>
-                        <li>"Find the most improved students based on contest rankings"</li>
                     </ul>
                 </div>
             """)
@@ -372,50 +488,9 @@ def create_gradio_app():
                 - contestdate: TIMESTAMP WITH TIME ZONE (Contest date)
                 - createdat: TIMESTAMP WITH TIME ZONE (Record creation time)
                 - updatedat: TIMESTAMP WITH TIME ZONE (Record update time)
-                
-                Important Notes:
-                - Use double quotes for table and column names
-                - Platform enum values: 'LEETCODE', 'CODEFORCES', 'CODECHEF'
-                - Rating fields can be NULL
-                - Date fields use TIMESTAMP WITH TIME ZONE format
                 """,
                 language="sql"
             )
-        
-        # System Information
-        with gr.Accordion("⚙️ System Information", open=False):
-            gr.Markdown("""
-            ### 🔧 Technical Components
-            
-            **RAG System:**
-            - **Vector Database:** ChromaDB (persistent, local storage)
-            - **Embeddings:** Ollama nomic-embed-text model
-            - **Knowledge Base:** SQL documentation, examples, and best practices
-            
-            **NL2SQL Pipeline:**
-            - **LLM:** Ollama Llama 3.2 (free, local)
-            - **Workflow:** LangGraph state management
-            - **Database:** PostgreSQL with proper error handling
-            
-            **Features:**
-            - ✅ Context-aware query generation
-            - ✅ Intelligent error handling with suggestions
-            - ✅ Knowledge base expansion
-            - ✅ Multi-step reasoning with RAG
-            - ✅ Persistent vector storage
-            
-            ### 📋 Requirements
-            ```bash
-            # Install required packages
-            pip install gradio psycopg2-binary pandas langchain-community 
-            pip install ollama langgraph chromadb
-            
-            # Install and setup Ollama
-            curl -fsSL https://ollama.ai/install.sh | sh
-            ollama pull llama3.2:latest
-            ollama pull nomic-embed-text:latest
-            ```
-            """)
         
         # Event handlers
         init_btn.click(
@@ -426,25 +501,19 @@ def create_gradio_app():
         submit_btn.click(
             fn=process_question,
             inputs=[question_input],
-            outputs=[answer_output, sql_output, results_output, rag_context_output]
-        )
-        
-        add_knowledge_btn.click(
-            fn=add_knowledge_to_rag,
-            inputs=[knowledge_input, knowledge_type],
-            outputs=[knowledge_status]
+            outputs=[answer_output, sql_output, results_output]
         )
         
         clear_btn.click(
-            lambda: ("", "", "", "", ""),
-            outputs=[question_input, answer_output, sql_output, results_output, rag_context_output]
+            lambda: ("", "", "", ""),
+            outputs=[question_input, answer_output, sql_output, results_output]
         )
         
         # Enter key support
         question_input.submit(
             fn=process_question,
             inputs=[question_input],
-            outputs=[answer_output, sql_output, results_output, rag_context_output]
+            outputs=[answer_output, sql_output, results_output]
         )
     
     return app
@@ -452,14 +521,12 @@ def create_gradio_app():
 # Main function to run the app
 def main():
     """Main function to launch the Gradio app"""
-    print("🚀 Starting Natural Language to SQL Query System with RAG...")
+    print("🚀 Starting Natural Language to SQL Query System...")
     print("📋 Make sure you have:")
     print("   - Ollama installed and running")
-    print("   - llama3.2:latest model pulled (ollama pull llama3.2:latest)")
-    print("   - nomic-embed-text:latest model pulled (ollama pull nomic-embed-text:latest)")
+    print("   - llama3.2:latest model pulled")
     print("   - Database accessible")
     print("   - All required packages installed")
-    print("   - ChromaDB will be initialized automatically")
     print()
     
     app = create_gradio_app()
@@ -467,21 +534,18 @@ def main():
     # Launch the app
     app.launch(
         server_name="127.0.0.1",  # Change to "0.0.0.0" to make it accessible externally
-        server_port=7862,
+        server_port=7860,
         share=False,  # Set to True to create a public link
         debug=True,
         show_error=True
     )
 
 if __name__ == "__main__":
-    # Required packages installation command:
-    """
-    pip install gradio psycopg2-binary pandas langchain-community ollama langgraph chromadb
+    # Required packages:
+    # pip install gradio psycopg2-binary pandas langchain-community ollama langgraph
     
-    # Ollama setup:
-    curl -fsSL https://ollama.ai/install.sh | sh
-    ollama pull llama3.2:latest
-    ollama pull nomic-embed-text:latest
-    """
+    # Make sure Ollama is installed and running:
+    # curl -fsSL https://ollama.ai/install.sh | sh
+    # ollama pull llama3.2:latest
     
     main()

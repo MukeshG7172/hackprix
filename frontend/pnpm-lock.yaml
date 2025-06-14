@@ -18,7 +18,7 @@ importers:
         specifier: ^2.1.6
         version: 2.2.5(@types/react-dom@19.1.6(@types/react@19.1.8))(@types/react@19.1.8)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@radix-ui/react-separator':
-        specifier: ^1.1.2
+        specifier: ^1.1.7
         version: 1.1.7(@types/react-dom@19.1.6(@types/react@19.1.8))(@types/react@19.1.8)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@radix-ui/react-slider':
         specifier: ^1.2.3
@@ -62,6 +62,9 @@ importers:
       recharts:
         specifier: ^2.15.1
         version: 2.15.3(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      separator:
+        specifier: ^0.1.0
+        version: 0.1.0
       simplex-noise:
         specifier: ^4.0.3
         version: 4.0.3
@@ -2242,6 +2245,9 @@ packages:
     resolution: {integrity: sha512-RF0Fw+rO5AMf9MAyaRXI4AV0Ulj5lMHqVxxdSgiVbixSCXoEmmX/jk0CuJw4+3SqroYO9VoUh+HcuJivvtJemA==}
     engines: {node: '>=10'}
     hasBin: true
+
+  separator@0.1.0:
+    resolution: {integrity: sha512-cyN9CDc8Eniaeuv4G1Ec+edO/mSu0SdlLl6+nBXKgaprYpuBEnbHyPAqa5sD+vl1fLbYXxoDSpyjmA3SD25fLg==}
 
   set-function-length@1.2.2:
     resolution: {integrity: sha512-pgRc4hJ4/sNjWCSS9AmnS40x3bNMDTknHgL5UaMBTMyJnU90EgWh1Rz+MC9eFu4BuN/UwZjKQuY/1v3rM7HMfg==}
@@ -4757,6 +4763,8 @@ snapshots:
   semver@6.3.1: {}
 
   semver@7.7.2: {}
+
+  separator@0.1.0: {}
 
   set-function-length@1.2.2:
     dependencies:

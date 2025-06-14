@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 
 interface Participant {
+  leetcode_id: string;
   name: string;
   rank: number;
   dept: string;
@@ -13,6 +14,7 @@ interface Participant {
 }
 
 interface ContestAnalysisData {
+  leetcode_id: string;
   name: string;
   date: string;
   type: string;

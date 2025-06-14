@@ -86,24 +86,34 @@ export async function GET() {
 
           return {
             ...contest,
-            topPerformers: current.slice(0, 3).map((p) => ({
-              name: p.Students.name,
-              rank: p.rank,
-              dept: p.Students.dept,
-              section: p.Students.section,
-              year: p.Students.batch,
-              no_of_questions: p.total_qns,
-              finish_time: p.finishTime || null,
-            })),
-            allParticipants: current.map((p) => ({
-              name: p.Students.name,
-              rank: p.rank,
-              dept: p.Students.dept,
-              section: p.Students.section,
-              year: p.Students.batch,
-              no_of_questions: p.total_qns,
-              finish_time: p.finishTime || null,
-            })), // Include all participants
+            topPerformers: current.slice(0, 3).map((p) => {
+              const baseInfo = {
+                name: p.Students.name,
+                rank: p.rank,
+                dept: p.Students.dept,
+                section: p.Students.section,
+                year: p.Students.batch,
+                no_of_questions: p.total_qns,
+                finish_time: p.finishTime || null,
+              };
+              return contest.type === "Leetcode"
+                ? { leetcode_id: p.Students.leetcode_id, ...baseInfo }
+                : baseInfo;
+            }),
+            allParticipants: current.map((p) => {
+              const baseInfo = {
+                name: p.Students.name,
+                rank: p.rank,
+                dept: p.Students.dept,
+                section: p.Students.section,
+                year: p.Students.batch,
+                no_of_questions: p.total_qns,
+                finish_time: p.finishTime || null,
+              };
+              return contest.type === "Leetcode"
+                ? { leetcode_id: p.Students.leetcode_id, ...baseInfo }
+                : baseInfo;
+            }),
             participation: {
               newCount: current.length,
               previousCount: previous.length,

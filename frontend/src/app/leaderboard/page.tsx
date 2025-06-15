@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { platform } from "os";
 
-type FilterType = "dept" | "section" | "noOfQuestions" | "batch" | "status" | "rank";
+type FilterType = "dept" | "section" | "noOfQuestions" | "batch" | "status";
 
 export default function Leaderboard() {
   const { selectedContest, isLoading } = useContest();
@@ -28,7 +28,6 @@ export default function Leaderboard() {
     noOfQuestions: "all",
     batch: "all",
     status: "all",
-    rank: { from: "", to: "" },
   });
   const [showCal, setShowCal] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -38,7 +37,6 @@ export default function Leaderboard() {
     noOfQuestions: false,
     batch: false,
     status: false,
-    rank: false,
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage] = useState(25);
@@ -71,7 +69,6 @@ export default function Leaderboard() {
         noOfQuestions: "all",
         batch: "all",
         status: "all",
-        rank: { from: "", to: "" },
       });
     }
   }, [selectedContest]);
@@ -81,14 +78,6 @@ export default function Leaderboard() {
     if (!selectedContest) return;
 
     let result = [...selectedContest.allParticipants];
-
-    const from = filters.rank?.from.trim() !== "" ? Number(filters.rank.from) : -Infinity;
-    const to = filters.rank?.to.trim() !== "" ? Number(filters.rank.to) : Infinity;
-
-    result = result.filter(p => {
-      if (p.rank === -1) return false;
-      return p.rank >= from && p.rank <= to;
-    });
 
     if (filters.dept !== "all") {
       result = result.filter(p => p.dept === filters.dept);
@@ -274,64 +263,7 @@ export default function Leaderboard() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-16 font-semibold text-black text-center">S.No</TableHead>
-                      <TableHead className="w-20 font-semibold text-black">
-                        <div className="flex flex-row items-center justify-between relative">
-                          <span>Rank</span>
-                          <div
-                            className="ml-1 w-6 h-6 bg-gray-200 rounded-full border-black border flex items-center justify-center cursor-pointer hover:bg-gray-300"
-                            onClick={() => toggleFilterOptions("rank")}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
-                            </svg>
-                          </div>
-                          {showFilterOptions.rank && (
-                            <div className="absolute z-10 bg-white border rounded shadow-lg top-full right-0 min-w-[100px] p-2">
-                              <div className="mb-2">
-                                <label className="block text-sm text-gray-700">From</label>
-                                <input
-                                  type="number"
-                                  value={filters.rank.from}
-                                  className="w-full"
-                                  onChange={(e) =>
-                                    setFilters((prev) => ({
-                                      ...prev,
-                                      rank: {
-                                        ...prev.rank,
-                                        from: e.target.value,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="mb-2">
-                                <label className="block text-sm text-gray-700">To</label>
-                                <input
-                                  type="number"
-                                  value={filters.rank.to}
-                                  className="w-full"
-                                  onChange={(e) =>
-                                    setFilters((prev) => ({
-                                      ...prev,
-                                      rank: {
-                                        ...prev.rank,
-                                        to: e.target.value,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <Button
-                                className="w-full mt-2"
-                                size="sm"
-                                onClick={() => setShowFilterOptions(prev => ({ ...prev, rank: false }))}
-                              >
-                                Apply
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      </TableHead>
+                      <TableHead className="w-20 font-semibold text-black">Rank</TableHead>
                       <TableHead className="font-semibold text-black">Name</TableHead>
                       <TableHead className="text-center">
                         <div className="flex flex-row items-center justify-center relative">

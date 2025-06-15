@@ -7,6 +7,7 @@ interface UpdateResults {
   total: number;
   successCount: number;
   failureCount: number;
+  contestError?: string; // Added this property for consistency
 }
 
 export const updateCodechefdata = async (
@@ -19,39 +20,52 @@ export const updateCodechefdata = async (
     total: students.length,
     successCount: 0,
     failureCount: 0,
-  };
+  } as UpdateResults;
 
   // If no contest name provided, exit early
   if (!contestName) {
     console.log("No contest name provided, skipping update");
+    results.contestError = "Contest name is required";
     return results;
   }
 
   console.log(`Processing data for contest: ${contestName}`);
 
-  const contest_record = await ensureContestExists(contestName);
+  try {
+    const contest_record = await ensureContestExists(contestName);
+    console.log(`Contest record created/found with ID: ${contest_record.id}`);
 
-  console.log(`Contest record created/found with ID: ${contest_record.id}`);
-
-  for (const student of students) {
-    try {
-      await updateStudentCodechefData(student, contestName, contest_record.id);
-      results.success.push(student.codechef_id);
-      console.log(
-        `Updated data for ${student.codechef_id} - Contest: ${contestName}`,
-      );
-    } catch (error) {
-      console.error(`Failed to update data for ${student.codechef_id}:`, error);
-      results.failed.push(student.codechef_id);
+    for (const student of students) {
+      try {
+        await updateStudentCodechefData(
+          student,
+          contestName,
+          contest_record.id,
+        );
+        results.success.push(student.codechef_id);
+        console.log(
+          `Updated data for ${student.codechef_id} - Contest: ${contestName}`,
+        );
+      } catch (error) {
+        console.error(
+          `Failed to update data for ${student.codechef_id}:`,
+          error,
+        );
+        results.failed.push(student.codechef_id);
+      }
     }
+
+    results.successCount = results.success.length;
+    results.failureCount = results.failed.length;
+
+    console.log(
+      `Contest processing completed: ${results.successCount} success, ${results.failureCount} failed`,
+    );
+  } catch (error) {
+    results.contestError =
+      error instanceof Error ? error.message : "Unknown error occurred";
   }
 
-  results.successCount = results.success.length;
-  results.failureCount = results.failed.length;
-
-  console.log(
-    `Contest processing completed: ${results.successCount} success, ${results.failureCount} failed`,
-  );
   return results;
 };
 
@@ -106,7 +120,7 @@ async function ensureContestExists(contestName: string) {
         data: {
           name: contestName,
           date: contestDate,
-          type: "Codechef",
+          type: "Codechef", // Using the enum value
         },
       });
       console.log(`Contest created with ID: ${contest.id}`);

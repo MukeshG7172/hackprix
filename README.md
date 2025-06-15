@@ -55,7 +55,7 @@ Powered by **LangGraph**, **Ollama (LLaMA 3.2)**, and **Gradio**, this module le
 | Frontend     | Next.js, React, TailwindCSS, Chart.js       |
 | Backend      | Node.js, Prisma ORM, PostgreSQL             |
 | AI Interface | LangGraph, LLaMA 3.2 (Ollama), Gradio       |
-| Database     | Neon PostgreSQL                             |
+| Database     | PostgreSQL                                  |
 | Tools        | Node Schedule, dotenv, ts-node, Python      |
 
 ---
